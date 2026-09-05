@@ -31,6 +31,12 @@ public final class XaeroAdapter implements MinimapAdapter {
 
     private final AtomicBoolean compatibilityWarningLogged = new AtomicBoolean();
     private final Map<Object, String> managedNativeWaypoints = new IdentityHashMap<>();
+    /**
+     * Binds each Xaero WaypointSet instance to the Minecraft dimension in which it was first
+     * observed. Minecraft's world object changes before Xaero finishes switching its waypoint
+     * world during portal travel, so this lets us recognize and ignore that transient mismatch.
+     */
+    private final Map<Object, String> waypointSetDimensions = new IdentityHashMap<>();
     private Reflection reflection;
 
     @Override
@@ -41,7 +47,10 @@ public final class XaeroAdapter implements MinimapAdapter {
     @Override
     public boolean isReady() {
         try {
-            return reflection().currentWorld() != null;
+            Reflection r = reflection();
+            Object world = r.currentWorld();
+            Object set = world == null ? null : r.currentWaypointSet(world);
+            return set != null && waypointSetMatchesCurrentDimension(set);
         } catch (ReflectiveOperationException | RuntimeException e) {
             if (compatibilityWarningLogged.compareAndSet(false, true)) {
                 WaypointSync.LOGGER.warn(
@@ -56,7 +65,15 @@ public final class XaeroAdapter implements MinimapAdapter {
 
     @Override
     public String contextKey() throws Exception {
-        return currentDimension();
+        Reflection r = reflection();
+        Object world = r.currentWorld();
+        Object set = world == null ? null : r.currentWaypointSet(world);
+        if (set == null || !waypointSetMatchesCurrentDimension(set)) {
+            // ClientSyncManager checks isReady() first, but keep contextKey defensive so a Xaero
+            // dimension transition can never cause a snapshot to be applied to the previous set.
+            return currentDimension() + "|xaero-pending";
+        }
+        return currentDimension() + "|" + System.identityHashCode(set);
     }
 
     @Override
@@ -68,7 +85,7 @@ public final class XaeroAdapter implements MinimapAdapter {
     public List<ObservedWaypoint> readObservedWaypoints() throws Exception {
         Reflection r = reflection();
         Object set = r.currentWaypointSet();
-        if (set == null) {
+        if (set == null || !waypointSetMatchesCurrentDimension(set)) {
             return List.of();
         }
 
@@ -120,7 +137,11 @@ public final class XaeroAdapter implements MinimapAdapter {
         Reflection r = reflection();
         Object world = r.currentWorld();
         Object set = world == null ? null : r.currentWaypointSet(world);
-        if (set == null) {
+        if (set == null || !waypointSetMatchesCurrentDimension(set)) {
+            // Minecraft updates client.world before Xaero necessarily updates its current waypoint
+            // world. Never write a snapshot into a WaypointSet that we have already observed in a
+            // different dimension; doing so permanently leaks Nether entries into the Overworld
+            // (or vice versa) when that old set becomes active again.
             return;
         }
 
@@ -148,10 +169,19 @@ public final class XaeroAdapter implements MinimapAdapter {
         // adopts that edit (accepted by the server) or replaces it with the server version.
         for (Map.Entry<Object, String> managedEntry : List.copyOf(managedNativeWaypoints.entrySet())) {
             Object managed = managedEntry.getKey();
-            if (!currentDimension.equals(managedEntry.getValue())) {
+            if (!nativeSnapshot.contains(managed)) {
+                managedNativeWaypoints.remove(managed);
                 continue;
             }
-            if (!nativeSnapshot.contains(managed)) {
+
+            // Xaero can keep the same active WaypointSet object across a dimension transition.
+            // A synchronized Nether waypoint that was inserted while the player was in the Nether
+            // would therefore remain in that set and render in the Overworld unless we explicitly
+            // evict managed entries whose authoritative dimension is no longer active. Removing it
+            // here is presentation-only: the server snapshot still owns the waypoint and it will be
+            // recreated when the player returns to the waypoint's dimension.
+            if (!currentDimension.equals(managedEntry.getValue())) {
+                r.removeWaypoint(set, managed);
                 managedNativeWaypoints.remove(managed);
                 continue;
             }
@@ -210,6 +240,17 @@ public final class XaeroAdapter implements MinimapAdapter {
     public void resetSession() {
         compatibilityWarningLogged.set(false);
         managedNativeWaypoints.clear();
+        waypointSetDimensions.clear();
+    }
+
+    private boolean waypointSetMatchesCurrentDimension(Object set) {
+        String minecraftDimension = currentDimension();
+        String boundDimension = waypointSetDimensions.get(set);
+        if (boundDimension == null) {
+            waypointSetDimensions.put(set, minecraftDimension);
+            return true;
+        }
+        return boundDimension.equals(minecraftDimension);
     }
 
     private static boolean isAutomaticXaeroWaypoint(Waypoint waypoint) {

@@ -2,6 +2,7 @@ package com.csclub05.waypointsync.client.minimap.voxelmap;
 
 import com.csclub05.waypointsync.client.minimap.MinimapAdapter;
 import com.csclub05.waypointsync.model.Waypoint;
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.world.dimension.DimensionType;
 
 import java.lang.reflect.Constructor;
@@ -64,6 +65,11 @@ public final class VoxelMapAdapter implements MinimapAdapter {
     }
 
     @Override
+    public String contextKey() {
+        return currentDimension();
+    }
+
+    @Override
     public List<Waypoint> readWaypoints() throws Exception {
         return readObservedWaypoints().stream().map(ObservedWaypoint::waypoint).toList();
     }
@@ -105,7 +111,10 @@ public final class VoxelMapAdapter implements MinimapAdapter {
         List<Object> current = List.copyOf(currentCollection);
         managedNativeWaypoints.retainAll(current);
 
-        List<Waypoint> unmatchedServerWaypoints = new ArrayList<>(waypoints);
+        String activeDimension = currentDimension();
+        List<Waypoint> unmatchedServerWaypoints = waypoints.stream()
+                .filter(waypoint -> waypoint.dimension().equals(activeDimension))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
 
         // Keep already-managed entries when their current visible state is still authoritative.
         // This is also what makes a local edit survive until the server confirms it.
@@ -141,6 +150,14 @@ public final class VoxelMapAdapter implements MinimapAdapter {
     @Override
     public void resetSession() {
         managedNativeWaypoints.clear();
+    }
+
+    private static String currentDimension() {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.world == null) {
+            return "unavailable";
+        }
+        return client.world.getRegistryKey().getValue().toString();
     }
 
     private int findMatchingServerWaypoint(Reflection r, Object nativeWaypoint, List<Waypoint> candidates)
