@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "waypointsync",
+  "version": "${version}",
+  "name": "Crimson WaySync",
+  "description": "Synchronizes shared minimap waypoints between players on a Fabric server.",
+  "authors": [
+    "CSClub05"
+  ],
+  "license": "MIT",
+  "icon": "assets/waypointsync/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.csclub05.waypointsync.WaypointSync"
+    ],
+    "client": [
+      "com.csclub05.waypointsync.client.WaypointSyncClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.10",
+    "minecraft": "~1.21.4",
+    "java": ">=21",
+    "fabric-api": "*"
+  },
+  "suggests": {
+    "xaerominimap": "*",
+    "voxelmap": "*"
+  }
+}
